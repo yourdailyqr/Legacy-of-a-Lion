@@ -236,8 +236,9 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 9px;
-    padding-top: 10px;
+    gap: 6px;
+    padding-top: 8px;
+    padding-bottom: 0;
     border-top: 1px solid rgba(232,184,75,0.35);
     opacity: 0;
     animation: fadeUp 0.6s ease 0.4s forwards;
@@ -246,7 +247,8 @@
   .nav-row {
     display: flex;
     align-items: center;
-    gap: 20px;
+    justify-content: space-between;
+    width: 100%;
   }
 
   .nav-btn {
@@ -275,7 +277,7 @@
 
   .nav-label {
     font-family: 'Cinzel', serif;
-    font-size: clamp(13px, 3.5vw, 16px);
+    font-size: clamp(15px, 4.2vw, 19px);
     font-weight: 600;
     letter-spacing: 0.2em;
     color: rgba(255,255,255,0.8);
@@ -286,7 +288,7 @@
 
   .site-link {
     font-family: 'Cinzel', serif;
-    font-size: clamp(11px, 3vw, 14px);
+    font-size: clamp(8px, 2vw, 10px);
     letter-spacing: 0.16em;
     color: rgba(255,255,255,0.5);
     text-decoration: none;
@@ -439,30 +441,65 @@
 
 <script>
 // ── SCAN GATE — Rolling 72-Hour Inactivity Timer ─────────────────────────
-// Key is product-specific so multiple YDQR products never collide
+//
+// RULE 1: Fresh scan or URL open (new session, empty sessionStorage)
+//         → always show content immediately, no gate check.
+//         sessionStorage is cleared by the browser on every new tab/window
+//         open and on every QR scan, making it a reliable "is this a fresh
+//         entry?" signal. localStorage persists across sessions.
+//
+// RULE 2: Returning visit, stamp < 72 hrs old
+//         → roll the localStorage stamp forward, show content.
+//
+// RULE 3: Returning visit, stamp >= 72 hrs old
+//         → CLEAR (not just read) the stamp, show gate, block content.
+//
+// RULE 4: Gate is showing → user must rescan or retype URL.
+//         That new load is a fresh session (empty sessionStorage) → Rule 1.
+//
+// visibilitychange: re-evaluate when a backgrounded tab comes back into view.
+//         sessionStorage is NOT re-checked here (the session is ongoing);
+//         only the localStorage stamp age is checked.
+
 const GATE_KEY = 'ydq_legacyofthelion_last_view_ts';
-const GATE_MS  = 72 * 60 * 60 * 1000; // 72 hours in milliseconds
+const GATE_MS  = 72 * 60 * 60 * 1000; // 72 hours in ms
+const SESSION_KEY = 'ydq_lotl_session_active';
+
+function stampAndShow() {
+  // Set/refresh the localStorage timestamp and mark this session as active
+  localStorage.setItem(GATE_KEY, String(Date.now()));
+  sessionStorage.setItem(SESSION_KEY, '1');
+}
 
 function evaluateGate() {
+  // RULE 1: fresh session (new scan / new URL open) — always allow
+  if (!sessionStorage.getItem(SESSION_KEY)) {
+    stampAndShow();
+    return true; // show content
+  }
+
+  // Returning visit — check the localStorage stamp
   const raw = localStorage.getItem(GATE_KEY);
-  const now = Date.now();
+  const now  = Date.now();
 
   if (!raw) {
-    // Rule 1: no stamp — first visit or after gate cleared; stamp & allow
-    localStorage.setItem(GATE_KEY, String(now));
+    // No stamp at all (edge case: storage cleared externally) — treat as fresh
+    stampAndShow();
     return true;
   }
 
   const elapsed = now - parseInt(raw, 10);
+
   if (elapsed < GATE_MS) {
-    // Rule 2: within 72 hrs — roll stamp forward, allow
-    localStorage.setItem(GATE_KEY, String(now));
+    // RULE 2: within 72 hrs — roll stamp forward, show content
+    stampAndShow();
     return true;
   }
 
-  // Rule 3: 72+ hrs — clear stamp, show gate, block content
+  // RULE 3: 72+ hrs — CLEAR stamp (do not reset it), show gate
   localStorage.removeItem(GATE_KEY);
-  return false;
+  sessionStorage.removeItem(SESSION_KEY);
+  return false; // show gate
 }
 
 function showGate() {
@@ -471,18 +508,33 @@ function showGate() {
 }
 
 function resetGate() {
-  // Testing/preview convenience — clears key and reloads (simulates a fresh scan)
+  // Testing/preview only — simulates a fresh QR scan
   localStorage.removeItem(GATE_KEY);
+  sessionStorage.removeItem(SESSION_KEY);
   location.reload();
 }
 
-// Check on page load
+// Evaluate on page load
 if (!evaluateGate()) showGate();
 
-// Re-check when tab becomes visible again (covers 72+ hrs with tab left open)
+// Re-evaluate when a backgrounded tab becomes visible again.
+// Does NOT re-check sessionStorage (session is still active);
+// only checks whether the localStorage stamp has aged past 72 hrs.
 document.addEventListener('visibilitychange', function () {
   if (document.visibilityState === 'visible') {
-    if (!evaluateGate()) showGate();
+    // If gate is already showing, do nothing
+    if (document.getElementById('gate-screen').classList.contains('active')) return;
+
+    const raw = localStorage.getItem(GATE_KEY);
+    if (!raw) { showGate(); return; }
+    const elapsed = Date.now() - parseInt(raw, 10);
+    if (elapsed >= GATE_MS) {
+      localStorage.removeItem(GATE_KEY);
+      sessionStorage.removeItem(SESSION_KEY);
+      showGate();
+    }
+    // Under 72 hrs — roll the stamp and stay visible
+    else { stampAndShow(); }
   }
 });
 // ── END GATE LOGIC ────────────────────────────────────────────────────────────
